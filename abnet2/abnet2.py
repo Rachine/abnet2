@@ -16,6 +16,18 @@ import copy
 
 epsilon = np.finfo(np.float32).eps
 
+def iterate_minibatches_folder(inputs_folder, batchsize=1000, shuffle=False):
+    """Generate mini bacthes from each file in the inputs folder
+    """
+    num_batch_files = len([name for name in os.listdir(inputs_folder) if os.path.isfile(name)])
+    
+    if shuffle:
+        indices = np.arrange(len_data)
+        np.random.shuffle(indices)
+    if len_data < batch_size:
+        print(" cndjncd") 
+
+
 
 def iterate_minibatches(inputs, batchsize=1000, shuffle=False):
     """Generate mini batches from datasets
@@ -54,6 +66,31 @@ def train_iteration(data_train, data_val, train_fn, val_fn):
     val_acc = 0
     val_batches = 0
     for batch in iterate_minibatches(data_val, 500, shuffle=False):
+        aux = val_fn(batch)
+        try:
+            err, acc = aux
+            val_acc += acc
+        except:
+            err = aux[0]
+            val_acc = None
+        val_err += err
+        val_batches += 1
+
+    return train_err / train_batches, val_err / val_batches
+
+def train_iteration_by_batch(data_train, data_val, train_fn, val_fn):
+    """Generic train iteration: one full pass over the data"""
+    train_err = 0
+    train_batches = 0
+    for batch in data_train:
+        train_err += train_fn(batch)
+        train_batches += 1
+
+    # And a full pass over the validation data:
+    val_err = 0
+    val_acc = 0
+    val_batches = 0
+    for batch in data_val:
         aux = val_fn(batch)
         try:
             err, acc = aux
@@ -122,6 +159,64 @@ def train(data_train, data_val, train_fn, val_fn, network, max_epochs=100, patie
     return best_model, best_epoch, run
 
 
+def train_by_batch(train_pairs, validation_pairs,features, train_fn, val_fn, network,get_next_batch=None, max_epochs=100, patience=20, save_run=True, eval_fn=None):
+    """Generic train strategy for neural networks
+    (batch training, train/val sets, patience)
+    Inject get_next_batch function that produces all the batches from folder
+    Trains a neural network according to some data (list of inputs, targets)
+    and a train function and an eval function on that data"""
+    print("training...")
+
+    run = []
+    best_model = None
+    best_epoch = None
+    if patience <= 0:
+        patience = max_epochs
+    patience_val = 0
+    best_val = None
+
+    for epoch in range(max_epochs):
+        start_time = time.time()
+        data_train = get_next_batch(features,train_pairs)
+        data_val = get_next_batch(features,validation_pairs)
+        train_err, val_err = train_iteration_by_batch(data_train, data_val,
+                                             train_fn, val_fn)
+
+        run.append(layers.get_all_param_values(network))
+        if np.isnan(val_err) or np.isnan(train_err):
+            print("Train error or validation error is NaN, "
+                  "stopping now.")
+            break
+        # Calculating patience
+        if best_val == None or val_err < best_val:
+            best_val = val_err
+            patience_val = 0
+            best_model = layers.get_all_param_values(network)
+            best_epoch = epoch
+        else:
+            patience_val += 1
+            if patience_val > patience:
+                print("No improvements after {} iterations, "
+                      "stopping now".format(patience))
+                break
+
+        # Then we print the results for this epoch:
+        print("Epoch {} of {} took {:.3f}s".format(
+            epoch + 1, max_epochs, time.time() - start_time))
+        print("  training loss:\t\t{:.6f}".format(train_err))
+        print("  validation loss:\t\t{:.6f}".format(val_err))
+        try:
+            print("  validation accuracy:\t\t{:.2f} %".format(
+                val_acc / val_batches * 100))
+        except:
+            if eval_fn != None:
+                acc = eval_fn(*data_val)
+                print("  validation accuracy:\t\t{:.2f} %".format(acc))
+
+    return best_model, best_epoch, run
+
+
+
 class Classifier_Nnet(object):
     """Build a standard deep neural network for classification
     """
@@ -156,8 +251,10 @@ class Classifier_Nnet(object):
         self.loss = lasagne.objectives.categorical_crossentropy(
             self.prediction, self.target_var).mean()
         self.params = layers.get_all_params(network, trainable=True)
-        self.updates = lasagne.updates.nesterov_momentum(
-            self.loss, self.params, learning_rate=0.01, momentum=0.9)
+        #self.updates = lasagne.updates.nesterov_momentum(
+        #    self.loss, self.params, learning_rate=0.01, momentum=0.9)
+        self.updates = lasagne.updates.adam(
+            self.loss, self.params,learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-08)
         # if non-determnistic:
         self.test_prediction = layers.get_output(network, deterministic=True)
         self.test_loss = lasagne.objectives.categorical_crossentropy(
@@ -182,6 +279,17 @@ class Classifier_Nnet(object):
 
         train([X_train, y_train], [X_val, y_val], train_batch, val_batch,
               self.network, max_epochs=max_epochs, patience=patience)
+
+
+    def train_by_batch(self,train_pairs, validation_pairs,features,get_next_batch=None, max_epochs=500, patience=20):
+        def train_batch(batch_data):
+            return self.train_fn(*batch_data)
+        def val_batch(batch_data):
+            return self.val_fn(*batch_data)
+
+        train_by_batch(train_pairs, validation_pairs,features, train_batch, val_batch,
+              self.network, get_next_batch=get_next_batch, max_epochs=max_epochs, patience=patience)
+
 
     def evaluate(self, X_test):
         for batch in iterate_minibatches([X_test], 500, shuffle=False):
@@ -208,7 +316,7 @@ class ABnet(object):
     """
     def __init__(self, dims, nonlinearities=None, dropouts=None,
                  update_fn=None, batch_norm=False,
-                 loss_type='cosine_margin', margin=0.8):
+                 loss_type='cosine_margin', margin=0.8, lstm_layers=False):
         """Initialize a Siamese neural network
 
         Parameters:
@@ -242,12 +350,25 @@ class ABnet(object):
             network2 = layers.DropoutLayer(network2, p=dropouts[0])
         # hidden layers
         for dim, dropout, nonlin in zip(dims[1:], dropouts[1:], nonlinearities):
-            network1 = layers.DenseLayer(network1, num_units=dim,
-                                         W=lasagne.init.GlorotUniform(),
-                                         nonlinearity=nonlin)
-            network2 = layers.DenseLayer(network2, num_units=dim,
-                                         W=network1.W, b=network1.b,
-                                         nonlinearity=nonlin)
+            if lstm_layers:
+                network1 = layers.LSTMLayer(network1, num_units=dim,
+                                            nonlinearity=nonlin)
+                ingate = layers.Gate(network1.W_in_to_ingate, network1.W_hid_to_ingate,
+                                              network1.W_cell_to_ingate, network1.b_ingate, network1.nonlinearity_ingate)
+                outgate = layers.Gate(lstm1.W_in_to_outgate, lstm1.W_hid_to_outgate,
+                                              lstm1.W_cell_to_ingate, lstm1.b_outgate, lstm1.nonlinearity_outgate)
+                network2 = layers.LSTMLayer(network2,num_units=dim,
+                                            ingate=network1.ingate, forgetgate=network1.forgetgate,
+                                            cell=network1.cell, outgate=network1.outgate,
+                                            nonlinearity=nonlin)
+            else:
+                                
+                network1 = layers.DenseLayer(network1, num_units=dim,
+                                             W=lasagne.init.GlorotUniform(),
+                                             nonlinearity=nonlin)
+                network2 = layers.DenseLayer(network2, num_units=dim,
+                                             W=network1.W, b=network1.b,
+                                             nonlinearity=nonlin)
             if batch_norm:
                 network1 = layers.batch_norm(network1)
                 network2 = layers.batch_norm(network2)
@@ -265,7 +386,7 @@ class ABnet(object):
         self.test_prediction2 = layers.get_output(network2, deterministic=True)
 
         self.change_loss(loss_type, margin)
-        self.change_update(update_fn)
+        self.updates = lasagne.updates.adam(self.loss, self.params,learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-08)
 
     def change_loss(self, loss_type='cosine_margin', margin=0.8):
         self.loss = loss_fn(self.prediction1, self.prediction2,
@@ -303,6 +424,18 @@ class ABnet(object):
             self.network, max_epochs=max_epochs, patience=patience)
         layers.set_all_param_values(self.network, best_weights)
         return run, best_epoch
+
+    def train_by_batch(self,train_pairs, validation_pairs,features,get_next_batch=None, max_epochs=500, patience=20):
+        def train_batch(batch_data):
+            return self.train_fn(*batch_data)
+        def val_batch(batch_data):
+            return self.val_fn(*batch_data)
+
+        best_weights, best_epoch, run = train_by_batch(train_pairs, validation_pairs,features, train_batch, val_batch,
+              self.network, get_next_batch=get_next_batch, max_epochs=max_epochs, patience=patience)
+        layers.set_all_param_values(self.network, best_weights)
+        return run, best_epoch
+
 
     def evaluate(self, X_test):
         embs = []

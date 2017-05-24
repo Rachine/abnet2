@@ -22,8 +22,10 @@ We assume you are using a conda virtual environment. First clone the ``abnet2`` 
 
 Then install its dependencies (here using conda, but it works with pip as well)::
 
-  conda install numpy theano lasagne cython
+  conda install numpy theano=0.8.0 lasagne cython
+  pip install --upgrade https://github.com/Lasagne/Lasagne/archive/master.zip  
 
+It is required to have ``0.2.dev1`` version of Lasagne for `batch_norm`.
 Finally install the ``abnet2`` package itself::
 
   python setup.py build

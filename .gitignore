@@ -4,3 +4,7 @@
 abnet2.egg-info/*
 build/*
 dist/*
+data/*
+*.pdf
+.spyproject/
+*.h5f
