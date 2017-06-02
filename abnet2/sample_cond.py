@@ -176,12 +176,13 @@ def type_sample_p(std_descr,  type_samp = 'log'):
 #p_types = type_sample_p(description)
 #print "Generate p_types took : {} s \n ".format(time.time() - t0)
 
-def sample_p(std_descr, type_samp = 'log', spk_samp = 'log'):
+def sample_spk(std_descr, spk_samp = 'f2'):
     """
-    Sampling proba modes for the types and for the speakers
+    Sampling proba modes for the speakers conditionned by the drawn type(s)
         - 1 : equiprobable
         - f2 : proportional to type probabilities
         - f : proportional to square root of type probabilities
+        - fcube : proportional to cube root of type probabilites
         - log : proportional to log of type probabilities
     """
     nb_tok = len(std_descr['tokens'])
@@ -196,29 +197,35 @@ def sample_p(std_descr, type_samp = 'log', spk_samp = 'log'):
         except:
             W_spk_types[(speakers[tok],tokens_type[tok])] = 1.0
     
+    if spk_samp == '1':
+        spk_samp_func = lambda x : 1
+    if spk_samp == 'f2':
+        spk_samp_func = lambda x : x
+    if spk_samp == 'f':
+        spk_samp_func = lambda x : np.sqrt(x)
+    if spk_samp == 'fcube':
+        spk_samp_func = lambda x : np.cbrt(x)
+    if spk_samp == 'log':
+        spk_samp_func = lambda x : np.log(1+x)
+        
     nb_types = len(std_descr['types'])
     for (spk,type_idx) in W_spk_types.keys(): 
-        if type_samp == '1':
-            p_spk_types["StypeSspk"][(spk,type_idx)] = 1.0
-        if type_samp == 'f2':
-            p_spk_types["StypeSspk"][(spk,type_idx)] = W_spk_types[(spk,type_idx)]   
-        if type_samp == 'f':
-            p_spk_types["StypeSspk"][(spk,type_idx)] = np.sqrt(W_spk_types[(spk,type_idx)])   
-        if type_samp == 'log':
-            p_spk_types["StypeSspk"][(spk,type_idx)]  = np.log(1.0 + W_spk_types[(spk,type_idx)])   
-        #for type_jdx in range(type_idx+1,nb_types):
-        #    if type_samp == '1':
-        #        p_types["Dtype"][(type_idx,type_jdx)] = 1.0 
-        #    if type_samp == 'f2':
-        #        p_types["Dtype"][(type_idx,type_jdx)]  = W_types[types[type_idx]]*W_types[types[type_jdx]] 
-        #    if type_samp == 'f':
-        #        p_types["Dtype"][(type_idx,type_jdx)]  = np.sqrt(W_types[types[type_idx]]*W_types[types[type_jdx]]) 
-        #    if type_samp == 'log':
-        #        p_types["Dtype"][(type_idx,type_jdx)]  = np.max(np.log(1.0 + np.sqrt(W_types[types[type_idx]]*W_types[types[type_jdx]])),0) 
-    import pdb 
+        for (spk2,type_jdx) in W_spk_types.keys():
+            if spk == spk2:
+                if type_idx == type_jdx: 
+                    p_spk_types['StypeSspk'][(spk,type_idx)] = spk_samp_func(W_spk_types[(spk,type_idx)]*(W_spk_types[(spk,type_idx)] - 1) )  
+                else:
+                    p_spk_types['DtypeSspk'][(spk,type_idx,type_jdx)] = spk_samp_func(W_spk_types[(spk,type_idx)]*W_spk_types[(spk,type_jdx)]) 
+            else:
+                if type_idx == type_jdx:
+                    p_spk_types['StypeDspk'][(spk,spk2,type_idx)] = spk_samp_func(W_spk_types[(spk,type_idx)]*W_spk_types[(spk2,type_idx)])     
+                else:
+                    p_spk_types['DtypeDspk'][(spk,spk2,type_idx,type_jdx)] = spk_samp_func(W_spk_types[(spk,type_idx)]*W_spk_types[(spk2,type_jdx)])
+    import pdb
     pdb.set_trace()
+    return p_spk_types
 
-sample_p(description)
+sample_spk(description)
 
 
 def generate_all_pairs(std_descr):
