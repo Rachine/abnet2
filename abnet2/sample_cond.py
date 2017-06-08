@@ -138,7 +138,9 @@ def type_sample_p(std_descr,  type_samp = 'log'):
         - 1 : equiprobable
         - f2 : proportional to type probabilities
         - f : proportional to square root of type probabilities
+        - fcube : proportional to cube root of type probabilities
         - log : proportional to log of type probabilities
+    TODO: Enable to inject directly custom function?
     """ 
     nb_tok = len(std_descr['tokens'])
     speakers = std_descr['speakers']
@@ -146,37 +148,37 @@ def type_sample_p(std_descr,  type_samp = 'log'):
     W_types = {}
     nb_types = len(std_descr['types'])
     types = std_descr['types']
-    assert type_samp in ['1', 'f', 'f2','log']
+    assert type_samp in ['1', 'f', 'f2','log', 'fcube']
+    if type_samp == '1':        
+        type_samp_func = lambda x : 1
+    if type_samp == 'f2':
+        type_samp_func = lambda x : x
+    if type_samp == 'f':
+        type_samp_func = lambda x : np.sqrt(x)
+    if type_samp == 'fcube':
+        type_samp_func = lambda x : np.cbrt(x)
+    if type_samp == 'log':
+        type_samp_func = lambda x : np.log(1+x)
+
     for tok in range(nb_tok):
         try:
             W_types[tokens_type[tok]] += 1.0
         except:
             W_types[tokens_type[tok]] = 1.0
     p_types = {"Stype" : {}, "Dtype":{}}
+    
     for type_idx in range(nb_types):
-        if type_samp == '1':
-            p_types["Stype"][type_idx] = 1.0
-        if type_samp == 'f2':
-            p_types["Stype"][type_idx] = W_types[types[type_idx]]   
-        if type_samp == 'f':
-            p_types["Stype"][type_idx] = np.sqrt(W_types[types[type_idx]])   
-        if type_samp == 'log':
-            p_types["Stype"][type_idx] = np.log(1.0 + W_types[types[type_idx]])   
+        p_types["Stype"][type_idx] = type_samp_func(W_types[types[type_idx]])
         for type_jdx in range(type_idx+1,nb_types):
-            if type_samp == '1':
-                p_types["Dtype"][(type_idx,type_jdx)] = 1.0 
-            if type_samp == 'f2':
-                p_types["Dtype"][(type_idx,type_jdx)]  = W_types[types[type_idx]]*W_types[types[type_jdx]] 
-            if type_samp == 'f':
-                p_types["Dtype"][(type_idx,type_jdx)]  = np.sqrt(W_types[types[type_idx]]*W_types[types[type_jdx]]) 
-            if type_samp == 'log':
-                p_types["Dtype"][(type_idx,type_jdx)]  = np.max(np.log(1.0 + np.sqrt(W_types[types[type_idx]]*W_types[types[type_jdx]])),0) 
+            p_types["Dtype"][(type_idx,type_jdx)] = type_samp_func(np.sqrt(W_types[types[type_idx]]*W_types[types[type_jdx]]))
+    
     return p_types        
 #t0 = time.time()
 #p_types = type_sample_p(description)
 #print "Generate p_types took : {} s \n ".format(time.time() - t0)
-
-def sample_spk(std_descr, spk_samp = 'f2'):
+#import pdb
+#pdb.set_trace()
+def sample_spk_p(std_descr, spk_samp = 'f2'):
     """
     Sampling proba modes for the speakers conditionned by the drawn type(s)
         - 1 : equiprobable
@@ -221,49 +223,62 @@ def sample_spk(std_descr, spk_samp = 'f2'):
                     p_spk_types['StypeDspk'][(spk,spk2,type_idx)] = spk_samp_func(W_spk_types[(spk,type_idx)]*W_spk_types[(spk2,type_idx)])     
                 else:
                     p_spk_types['DtypeDspk'][(spk,spk2,type_idx,type_jdx)] = spk_samp_func(W_spk_types[(spk,type_idx)]*W_spk_types[(spk2,type_jdx)])
-    import pdb
-    pdb.set_trace()
     return p_spk_types
 
-sample_spk(description)
+def normalize_distribution(p):
+    sum_norm = 0.0
+    keys = p.keys()
+    for key in keys:
+        sum_norm += p[key]
+    
+    for key in keys():
+        p[key] = p[key]/sum_norm
 
+    return p
 
-def generate_all_pairs(std_descr):
-    # could be optimized
-    # probably possible to do the sampling without
-    # generating all the pairs explicitly, but not obvious
-    # if this become necessary, I should look at it formally
-    # before programming anything
+def generate_possibilities(std_descr):
     """
-    TODO: Test if generate_all_pairs can scale to the zerospeech2017
-    Answer: Difficult to fit everything in memory
+    Generate possibilities between (types,speakers) and tokens/realisations
     """
-    pairs = {'Stype_Sspk' : [],
-             'Stype_Dspk' : [],
-             'Dtype_Sspk' : [],
-             'Dtype_Dspk' : []}
+    pairs = {'Stype_Sspk' : {},
+             'Stype_Dspk' : {},
+             'Dtype_Sspk' : {},
+             'Dtype_Dspk' : {}}
     nb_tok = len(std_descr['tokens'])
     speakers = std_descr['tokens_speaker']
     types = std_descr['tokens_type']
+    #p_types = type_sample_p(std_descr)
+    #p_spk_types = sample_spk_p(std_descr)
     for tok1 in range(nb_tok):
         for tok2 in range(tok1+1, nb_tok):
             spk_type = 'S' if speakers[tok1] == speakers[tok2] else 'D'
             type_type = 'S' if types[tok1] == types[tok2] else 'D'
             pair_type = type_type + 'type_' + spk_type + 'spk'
-            pairs[pair_type].append((tok1, tok2))
-    for e in pairs:
-        pairs[e] = np.vstack(pairs[e])
+            try:
+                if pair_type == 'Stype_Sspk':
+                    pairs[pair_type][(speakers[tok1],types[tok1])].append((tok1, tok2))
+                if pair_type == 'Stype_Dspk':
+                    pairs[pair_type][(speakers[tok1],speakers[tok2],types[tok1])].append((tok1, tok2))
+                if pair_type == 'Dtype_Sspk':
+                    pairs[pair_type][(speakers[tok1],types[tok1],types[tok2])].append((tok1, tok2))
+                if pair_type == 'Dtype_Dspk':
+                    pairs[pair_type][(speakers[tok1],speakers[tok2],types[tok1],types[tok2])].append((tok1, tok2))
+            except:
+                if pair_type == 'Stype_Sspk':
+                    pairs[pair_type][(speakers[tok1],types[tok1])] = [(tok1, tok2)]
+                if pair_type == 'Stype_Dspk':
+                    pairs[pair_type][(speakers[tok1],speakers[tok2],types[tok1])] = [(tok1, tok2)]
+                if pair_type == 'Dtype_Sspk':
+                    pairs[pair_type][(speakers[tok1],types[tok1],types[tok2])] = [(tok1, tok2)]
+                if pair_type == 'Dtype_Dspk':
+                    pairs[pair_type][(speakers[tok1],speakers[tok2],types[tok1],types[tok2])]= [(tok1, tok2)]
+    
+    #for e in pairs:
+    #    pairs[e] = np.vstack(pairs[e])
     return pairs
 
-#t0 = time.time()
-#pairs = generate_all_pairs(description)
-#fichier.write( "Generate all pairs took : {} s \n".format(time.time() - t0))
-#process = psutil.Process(os.getpid())
-#fichier.write( "Memory occupied with pairs {} kiloBytes \n".format(process.memory_info().rss/1024.0))
-#fichier.write( "Generate all pairs took : {} s \n".format(time.time() - t0))
-
-#fichier.close()
-#pdb.set_trace()
+pairs = generate_possibilities(description)
+pdb.set_trace()
 
 
 def token_sampling_p(std_descr, type_samp = 'f', speaker_samp='f', 
