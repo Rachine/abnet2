@@ -396,7 +396,7 @@ def print_token(tok):
     return "{0} {1:.2f} {2:.2f}".format(tok[0], tok[1], tok[2])
 
 
-def export_pairs(out_file, descr, pairs, seed=0):
+def export_pairs(out_dir, descr, pairs, seed=0, size_batch=16):
     # all the different types of pairs are randomly mixed in the output file
     # with an added 'same' or 'different' label added for types
     # same and different speakers pairs are not distinguishable in the output
@@ -414,15 +414,28 @@ def export_pairs(out_file, descr, pairs, seed=0):
     np.random.shuffle(ind)
     pairs = pairs[ind,:]
     pair_types = pair_types[ind]
-    lines = []
-    for i in range(n):
-        pair_type = 'same' if pair_types[i]==1 else 'diff'
-        pair = pairs[i,:]
-        tok1 = print_token(descr['tokens'][pair[0]])
-        tok2 = print_token(descr['tokens'][pair[1]])
-        lines.append(tok1 + " " + tok2 + " " +  pair_type + "\n")
-    with open(out_file, 'w') as fh:
-        fh.writelines(lines)
+    num_files = n//size_batch 
+    for file_idx in range(num_files):
+        lines = []
+        for i in range(size_batch):
+            pair_type = 'same' if pair_types[file_idx+i]==1 else 'diff'
+            pair = pairs[file_idx+i,:]
+            tok1 = print_token(descr['tokens'][pair[0]])
+            tok2 = print_token(descr['tokens'][pair[1]])
+            lines.append(tok1 + " " + tok2 + " " +  pair_type + "\n")
+    
+        with open(os.path.join(out_dir,'pair'+str(file_idx)), 'w') as fh:
+            fh.writelines(lines)
+    
+    
+    #for i in range(n):
+    #    pair_type = 'same' if pair_types[i]==1 else 'diff'
+    #    pair = pairs[i,:]
+    #    tok1 = print_token(descr['tokens'][pair[0]])
+    #    tok2 = print_token(descr['tokens'][pair[1]])
+    #    lines.append(tok1 + " " + tok2 + " " +  pair_type + "\n")
+    #with open(out_file, 'w') as fh:
+    #    fh.writelines(lines)
 
 
 def read_spkid_file(spkid_file):
@@ -442,8 +455,8 @@ def read_spk_list(spk_file):
     return [line.strip() for line in lines]
 
 
-def std2abnet(std_file, spkid_file, train_spk_file, test_spk_file,num_min_char=3,
-              out_dir, stats=False, seed=0,
+def std2abnet(std_file, spkid_file, train_spk_file, test_spk_file,
+              out_dir,num_min_char=0, stats=False, seed=0,
               type_sampling_mode='f', spk_sampling_mode='f'):
     """
     Main function : takes Term Discovery results and sample pairs
@@ -500,16 +513,20 @@ def std2abnet(std_file, spkid_file, train_spk_file, test_spk_file,num_min_char=3
                                    spk_sampling_mode=spk_sampling_mode,
                                    type_sampling_mode=type_sampling_mode)
         seed = seed+1
-        test_pairs = sample_pairs(test_descr, seed=seed, prefix='TEST ',
+        test_pairs = sample_pairs(test_descr, seed=seed, prefix='DEV ',
                                   spk_sampling_mode=spk_sampling_mode,
                                   type_sampling_mode=type_sampling_mode)
         # write pairs to disk
         seed = seed+1
-        export_pairs(os.path.join(out_dir,type_sampling_mode+ 'train.pairs'),
+        if not os.path.exists(os.path.join(out_dir,type_sampling_mode+ 'train.pairs')):
+                    os.makedirs(os.path.join(out_dir,type_sampling_mode+ 'train.pairs'))
+        export_pairs(os.path.join(out_dir,type_sampling_mode+'train.pairs'),
                      train_descr, train_pairs,
                      seed=seed)
         seed = seed+1
-        export_pairs(os.path.join(out_dir, type_sampling_mode+ 'test.pairs'),
+        if not os.path.exists(os.path.join(out_dir,type_sampling_mode+ 'dev.pairs')):
+                os.makedirs(os.path.join(out_dir,type_sampling_mode+ 'dev.pairs'))
+        export_pairs(os.path.join(out_dir,type_sampling_mode+'dev.pairs'),
                      test_descr, test_pairs,
                      seed=seed)
 
@@ -524,7 +541,7 @@ if __name__ == "__main__":
     parser.add_argument('spkid_file', help = "wav_id to spk_id matching")
     parser.add_argument('train_spk_file', help = "train speakers")      
     parser.add_argument('test_spk_file', help = "test speakers")
-    parser.add_argument('num_min_char', help = "min number of characters for words")
+    parser.add_argument('num_min_char', type=int, help = "min number of characters for words")
     parser.add_argument('out_dir', help = "output directory")
     parser.add_argument('--stats', action='store_true',
                         help="If specified, only plot some stats " + \
@@ -540,7 +557,7 @@ if __name__ == "__main__":
     print("Start sampling")
     t1 = time.time()
     std2abnet(args.std_file, args.spkid_file, args.train_spk_file,
-              args.test_spk_file,int(args.num_min_char), args.out_dir, args.stats, args.seed,
+              args.test_spk_file, args.out_dir,args.num_min_char, args.stats, args.seed,
               args.type_sampling_mode, args.spk_sampling_mode)
     print("Sample and output the pairs took {} s".format(time.time()-t1))
 
