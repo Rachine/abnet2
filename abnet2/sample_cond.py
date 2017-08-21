@@ -23,6 +23,7 @@ import os
 import psutil
 import time
 import random
+from joblib import Parallel, delayed
 
 
 def parse_STD_results(STD_file):
@@ -164,9 +165,11 @@ def type_sample_p(std_descr,  type_samp = 'log'):
     p_types = {"Stype" : {}, "Dtype":{}}
     
     for type_idx in range(nb_types):
-        p_types["Stype"][type_idx] = type_samp_func(W_types[types[type_idx]])
+        #p_types["Stype"][type_idx] = type_samp_func(W_types[types[type_idx]])
+        p_types["Stype"][type_idx] = type_samp_func(W_types[type_idx])
         for type_jdx in range(type_idx+1,nb_types):
-            p_types["Dtype"][(type_idx,type_jdx)] = type_samp_func(W_types[types[type_idx]])*type_samp_func(W_types[types[type_jdx]])
+        #    p_types["Dtype"][(type_idx,type_jdx)] = type_samp_func(W_types[types[type_idx]])*type_samp_func(W_types[types[type_jdx]])
+            p_types["Dtype"][(type_idx,type_jdx)] = type_samp_func(W_types[type_idx])*type_samp_func(W_types[type_jdx])
     
     return p_types        
 #t0 = time.time()
@@ -393,20 +396,7 @@ def print_token(tok):
     return "{0} {1:.2f} {2:.2f}".format(tok[0], tok[1], tok[2])
 
 
-def export_pairs(out_dir, descr,type_sampling_mode='f2',spk_sampling_mode='f2', seed=0, size_batch=16):
-    # all the different types of pairs are randomly mixed in the output file
-    # with an added 'same' or 'different' label added for types
-    # same and different speakers pairs are not distinguishable in the output
-    # TODO generate pairs for speaker labels
-    np.random.seed(seed)
-    same_pairs = ['Stype_Sspk', 'Stype_Dspk']
-    diff_pairs = ['Dtype_Sspk', 'Dtype_Dspk']
-    pairs =  generate_possibilities(descr)
-    proba = type_speaker_sampling_p(descr, type_samp = type_sampling_mode, speaker_samp = spk_sampling_mode)
-    num = np.min(descr['speakers'].values())
-    num_batches = num*(num-1) / 2
-    num_batches = num_batches // size_batch
-    for idx_batch in range(num_batches):
+def write_tokens_batch(descr,proba,pairs,size_batch,out_dir,idx_batch):
         lines = []
         sampled_batch = sample_batch(proba,pairs,num_per_config=size_batch/4)
         for config in sampled_batch.keys():
@@ -440,6 +430,24 @@ def export_pairs(out_dir, descr,type_sampling_mode='f2',spk_sampling_mode='f2', 
             fh.writelines(lines)
 
 
+def export_pairs(out_dir, descr,type_sampling_mode='f2',spk_sampling_mode='f2', seed=0, size_batch=16 ,num_jobs=1):
+    # all the different types of pairs are randomly mixed in the output file
+    # with an added 'same' or 'different' label added for types
+    # same and different speakers pairs are not distinguishable in the output
+    # TODO generate pairs for speaker labels
+    np.random.seed(seed)
+    same_pairs = ['Stype_Sspk', 'Stype_Dspk']
+    diff_pairs = ['Dtype_Sspk', 'Dtype_Dspk']
+    pairs =  generate_possibilities(descr)
+    proba = type_speaker_sampling_p(descr, type_samp = type_sampling_mode, speaker_samp = spk_sampling_mode)
+    num = np.min(descr['speakers'].values())
+    num_batches = num*(num-1) / 2
+    num_batches = num_batches // size_batch
+    Parallel(n_jobs=num_jobs, backend="threading")(
+        delayed(write_tokens_batch)(descr,proba,pairs,size_batch,out_dir,idx_batch) for idx_batch in range(num_batches))
+    #for idx_batch in range(num_batches):
+
+
 #out_dir = '/home/rriad/abnet2/test_generate_pairs'
 #export_pairs(out_dir, description,'log','f2', seed=10, size_batch=16)
 
@@ -463,7 +471,7 @@ def read_spk_list(spk_file):
 def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
               out_dir, stats=False, seed=0,
               type_sampling_mode='f2', spk_sampling_mode='f2',
-              size_batch = 16):
+              size_batch = 16, num_jobs=1):
     """
     Main function : takes Term Discovery results and sample pairs
         for training and testing an ABnet from it.
@@ -490,19 +498,22 @@ def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
     get_spkid_from_fid = read_spkid_file(spkid_file)
     # parsing STD results
     clusters = parse_STD_results(std_file)
-    std_descr = analyze_clusters(clusters, get_spkid_from_fid)
+    print("Cluster read")
+    #std_descr = analyze_clusters(clusters, get_spkid_from_fid)
+    print("Analysis clusters done")
     # parsing train/dev split
     train, dev = read_spk_list(train_spk_file), read_spk_list(dev_spk_file)
     # check that no speaker is present twice
     assert len(np.array(train+dev)) == len(np.unique(np.array(train+dev)))
     # check that all speakers match speakers in the STD results
-    for spk in train + dev:
-        assert spk in std_descr['speakers'].keys(), spk
+    #for spk in train + dev:
+    #    assert spk in std_descr['speakers'].keys(), spk
     # train, dev split
     train_clusters, dev_clusters = split_clusters(clusters, train, dev,
                                                    get_spkid_from_fid)
     train_descr = analyze_clusters(train_clusters, get_spkid_from_fid)
     dev_descr = analyze_clusters(dev_clusters, get_spkid_from_fid)
+    print("Split and cluster analysis done")
     # train and dev stats
     if stats:
         try:
@@ -521,13 +532,18 @@ def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
         export_pairs(os.path.join(out_dir, 'train_pairs'),
                      train_descr, type_sampling_mode = type_sampling_mode, 
                      spk_sampling_mode = spk_sampling_mode,
-                     seed=seed, size_batch = size_batch)
+                     seed=seed, size_batch = size_batch,
+                     num_jobs=num_jobs)
+        print("Train Pairs done")
         seed = seed+1
         os.makedirs(os.path.join(out_dir, 'dev_pairs')) 
         export_pairs(os.path.join(out_dir,'dev_pairs'),
                      dev_descr, type_sampling_mode = type_sampling_mode, 
                      spk_sampling_mode = spk_sampling_mode,
-                     seed = seed,size_batch = size_batch)
+                     seed = seed,size_batch = size_batch,
+                     num_jobs=num_jobs)
+        print("Dev Pairs done")
+
 
 ########
 # MAIN #
@@ -551,6 +567,8 @@ if __name__ == "__main__":
                         help = "1, f,f2, fcube, or log, default is f")
     parser.add_argument('--size_batch', type=int, default=16,
                         help = "number of pairs per batch")
+    parser.add_argument('--num_jobs', type=int, default=1,
+                        help = "number of jobs to output batch pairs")
     args = parser.parse_args()
     assert args.type_sampling_mode in ['1', 'f', 'f2','fcube','log' ]
     assert args.spk_sampling_mode in ['1', 'f', 'f2','fcube','log']
@@ -558,6 +576,7 @@ if __name__ == "__main__":
     t1 = time.time()
     std2abnet(args.std_file, args.spkid_file, args.train_spk_file,
               args.dev_spk_file, args.out_dir, args.stats, args.seed,
-              args.type_sampling_mode, args.spk_sampling_mode,args.size_batch)
+              args.type_sampling_mode, args.spk_sampling_mode,args.size_batch,
+              args.num_jobs)
     print("Sample and output the pairs took {} s".format(time.time()-t1))
 
