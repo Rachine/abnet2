@@ -24,7 +24,6 @@ import psutil
 import time
 import random
 
-import pdb
 
 def parse_STD_results(STD_file):
     """
@@ -69,8 +68,8 @@ def parse_STD_results(STD_file):
                 clusters.append(cluster)
                 i = i+1        
     return clusters
-STD_file = '/home/rriad/abnet2/abnet2/cluster_to_debug.txt'
-clusters = parse_STD_results(STD_file)
+#STD_file = '/home/rriad/abnet2/abnet2/cluster_to_debug.txt'
+#clusters = parse_STD_results(STD_file)
 
 def split_clusters(clusters, train_spk, test_spk, get_spkid_from_fid):    
     # train/test split based on talkers
@@ -444,7 +443,6 @@ def export_pairs(out_dir, descr,type_sampling_mode='f2',spk_sampling_mode='f2', 
 #out_dir = '/home/rriad/abnet2/test_generate_pairs'
 #export_pairs(out_dir, description,'log','f2', seed=10, size_batch=16)
 
-
 def read_spkid_file(spkid_file):
     with open(spkid_file, 'r') as fh:
         lines = fh.readlines()
@@ -464,7 +462,7 @@ def read_spk_list(spk_file):
 
 def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
               out_dir, stats=False, seed=0,
-              type_sampling_mode='f', spk_sampling_mode='f',
+              type_sampling_mode='f2', spk_sampling_mode='f2',
               size_batch = 16):
     """
     Main function : takes Term Discovery results and sample pairs
@@ -519,12 +517,14 @@ def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
     else:
         # generate and write pairs to disk
         seed = seed+1
-        export_pairs(os.path.join(out_dir, 'train.pairs'),
+        os.makedirs(os.path.join(out_dir, 'train_pairs'))
+        export_pairs(os.path.join(out_dir, 'train_pairs'),
                      train_descr, type_sampling_mode = type_sampling_mode, 
                      spk_sampling_mode = spk_sampling_mode,
                      seed=seed, size_batch = size_batch)
         seed = seed+1
-        export_pairs(os.path.join(out_dir,'dev.pairs'),
+        os.makedirs(os.path.join(out_dir, 'dev_pairs')) 
+        export_pairs(os.path.join(out_dir,'dev_pairs'),
                      dev_descr, type_sampling_mode = type_sampling_mode, 
                      spk_sampling_mode = spk_sampling_mode,
                      seed = seed,size_batch = size_batch)
@@ -545,9 +545,9 @@ if __name__ == "__main__":
                         help="If specified, only plot some stats " + \
                              "in figures.pdf")
     parser.add_argument('seed', type=int, help = "random seed")
-    parser.add_argument('--type_sampling_mode', default='f',
+    parser.add_argument('--type_sampling_mode', default='f2',
                         help = "1, f, f2, fcube, or log, default is f")
-    parser.add_argument('--spk_sampling_mode', default='f',
+    parser.add_argument('--spk_sampling_mode', default='f2',
                         help = "1, f,f2, fcube, or log, default is f")
     parser.add_argument('--size_batch', type=int, default=16,
                         help = "number of pairs per batch")
