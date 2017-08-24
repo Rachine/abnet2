@@ -24,7 +24,7 @@ import psutil
 import time
 import random
 from joblib import Parallel, delayed
-
+import pickle
 
 def parse_STD_results(STD_file):
     """
@@ -339,8 +339,24 @@ def pair_sampling_p(pairs, p_tok):
         p[e] = p[e]/np.float(np.sum(p[e]))
     return p
 
+def prepare_multinomial_sampling(p_spk_types):
+    """
+    Prepare cumulative sums for the configurations
+    """
+    cdf = {}
+    for config in p_spk_types.keys():
+        cdf[config] = np.cumsum(np.array(p_spk_types[config].values()))
+        cdf[config] /= cdf[config][-1]
+    return cdf
+
+def sample_searchidx(cdf,config,num_per_config):
+    uniform_samples = np.random.random_sample(num_per_config)
+    idx = cdf[config].searchsorted(uniform_samples, side='right')
+    return idx
+
 
 def sample_batch(p_spk_types,
+                 cdf,
                  pairs,
                  seed=0, prefix='',
                  num_per_config=15):
@@ -352,10 +368,16 @@ def sample_batch(p_spk_types,
              'Dtype_Sspk' : [],
              'Dtype_Dspk' : []}
     for config in p_spk_types.keys():
+        t0 = time.time()
         proba_config = np.array(p_spk_types[config].values())
+        print('make proba_config array took {} s'.format(time.time()-t0))
         sizes = len(p_spk_types[config].keys())
+        print('{} els possible for {}'.format(str(sizes),config))
         keys = np.array(p_spk_types[config].keys())
-        sample_idx = np.random.choice(sizes,num_per_config,p=proba_config, replace=False)
+        t1 = time.time()
+        #sample_idx = np.random.choice(sizes,num_per_config,p=proba_config, replace=True)
+        print('sample indexes took {} s'.format(time.time()-t1))
+        sample_idx = sample_searchidx(cdf,config,num_per_config)
         sample = keys[sample_idx]
         if config == 'Stype_Sspk':
             for key in sample:
@@ -387,6 +409,7 @@ def sample_batch(p_spk_types,
                     pot_tok = pairs[config][spk2,spk1,int(type_idx),int(type_jdx)]
                 num_tok = len(pot_tok)
                 sampled_tokens[config].append(pot_tok[np.random.choice(num_tok)])
+        #print('sample for config {} took {} s'.format(config,str(time.time() - t0 )))
     return sampled_tokens    
 
 
@@ -396,9 +419,12 @@ def print_token(tok):
     return "{0} {1:.2f} {2:.2f}".format(tok[0], tok[1], tok[2])
 
 
-def write_tokens_batch(descr,proba,pairs,size_batch,out_dir,idx_batch):
+def write_tokens_batch(descr,proba,cdf,pairs,size_batch,out_dir,idx_batch):
         lines = []
-        sampled_batch = sample_batch(proba,pairs,num_per_config=size_batch/4)
+        t1 = time.time()
+        sampled_batch = sample_batch(proba,cdf,pairs,num_per_config=size_batch/4)
+        #sampled_batch = sample_batch(proba,pairs,num_per_config=size_batch/4)
+        print('sample the batch took {}'.format(time.time() - t1))
         for config in sampled_batch.keys():
             if config == 'Stype_Sspk':
                 pair_type = 'same'
@@ -426,7 +452,7 @@ def write_tokens_batch(descr,proba,pairs,size_batch,out_dir,idx_batch):
                     lines.append(tok1 + " " + tok2 + " " +  pair_type + "\n")
         
         random.shuffle(lines)
-        with open(os.path.join(out_dir,'batch_pair_'+str(idx_batch)), 'w') as fh:
+        with open(os.path.join(out_dir,'pair_'+str(idx_batch))+'.batch', 'w') as fh:
             fh.writelines(lines)
 
 
@@ -438,18 +464,23 @@ def export_pairs(out_dir, descr,type_sampling_mode='f2',spk_sampling_mode='f2', 
     np.random.seed(seed)
     same_pairs = ['Stype_Sspk', 'Stype_Dspk']
     diff_pairs = ['Dtype_Sspk', 'Dtype_Dspk']
-    pairs =  generate_possibilities(descr)
+    timing = time.time()
+    if os.path.isfile(os.path.join(out_dir,"pairs_possibilities.p")):
+        pairs = pickle.load(open(os.path.join(out_dir,"pairs_possibilities.p"),"rb"))
+    else:
+        pairs = generate_possibilities(descr)
+        pickle.dump(pairs, open(os.path.join(out_dir,"pairs_possibilities.p"),"wb"))
+    print("Generate possibilites done, took {} s".format(time.time()-timing))
     proba = type_speaker_sampling_p(descr, type_samp = type_sampling_mode, speaker_samp = spk_sampling_mode)
+    cdf = prepare_multinomial_sampling(proba)
+    print("Proba done, start sampling batches and writing")
     num = np.min(descr['speakers'].values())
     num_batches = num*(num-1) / 2
     num_batches = num_batches // size_batch
+    print( 'Number of batches to sample {}'.format(num_batches))
     Parallel(n_jobs=num_jobs, backend="threading")(
-        delayed(write_tokens_batch)(descr,proba,pairs,size_batch,out_dir,idx_batch) for idx_batch in range(num_batches))
-    #for idx_batch in range(num_batches):
+        delayed(write_tokens_batch)(descr,proba,cdf,pairs,size_batch,out_dir,idx_batch) for idx_batch in range(num_batches))
 
-
-#out_dir = '/home/rriad/abnet2/test_generate_pairs'
-#export_pairs(out_dir, description,'log','f2', seed=10, size_batch=16)
 
 def read_spkid_file(spkid_file):
     with open(spkid_file, 'r') as fh:
