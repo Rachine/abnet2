@@ -23,7 +23,7 @@ import os
 import psutil
 import time
 import random
-from joblib import Parallel, delayed
+#from joblib import Parallel, delayed
 import pickle
 
 def parse_STD_results(STD_file):
@@ -370,13 +370,13 @@ def sample_batch(p_spk_types,
     for config in p_spk_types.keys():
         t0 = time.time()
         proba_config = np.array(p_spk_types[config].values())
-        print('make proba_config array took {} s'.format(time.time()-t0))
+        #print('make proba_config array took {} s'.format(time.time()-t0))
         sizes = len(p_spk_types[config].keys())
-        print('{} els possible for {}'.format(str(sizes),config))
+        #print('{} els possible for {}'.format(str(sizes),config))
         keys = np.array(p_spk_types[config].keys())
         t1 = time.time()
         #sample_idx = np.random.choice(sizes,num_per_config,p=proba_config, replace=True)
-        print('sample indexes took {} s'.format(time.time()-t1))
+        #print('sample indexes took {} s'.format(time.time()-t1))
         sample_idx = sample_searchidx(cdf,config,num_per_config)
         sample = keys[sample_idx]
         if config == 'Stype_Sspk':
@@ -409,7 +409,7 @@ def sample_batch(p_spk_types,
                     pot_tok = pairs[config][spk2,spk1,int(type_idx),int(type_jdx)]
                 num_tok = len(pot_tok)
                 sampled_tokens[config].append(pot_tok[np.random.choice(num_tok)])
-        #print('sample for config {} took {} s'.format(config,str(time.time() - t0 )))
+        #print('fill batch took {} s'.format(str(time.time() - t1 )))
     return sampled_tokens    
 
 
@@ -466,20 +466,25 @@ def export_pairs(out_dir, descr,type_sampling_mode='f2',spk_sampling_mode='f2', 
     diff_pairs = ['Dtype_Sspk', 'Dtype_Dspk']
     timing = time.time()
     if os.path.isfile(os.path.join(out_dir,"pairs_possibilities.p")):
+        print('loading possibilities')
         pairs = pickle.load(open(os.path.join(out_dir,"pairs_possibilities.p"),"rb"))
     else:
+        print('generate possibilities')
         pairs = generate_possibilities(descr)
         pickle.dump(pairs, open(os.path.join(out_dir,"pairs_possibilities.p"),"wb"))
     print("Generate possibilites done, took {} s".format(time.time()-timing))
+    timing = time.time()
     proba = type_speaker_sampling_p(descr, type_samp = type_sampling_mode, speaker_samp = spk_sampling_mode)
     cdf = prepare_multinomial_sampling(proba)
-    print("Proba done, start sampling batches and writing")
+    print("Proba done in {} s, start sampling batches and writing".format(time.time()-timing))
     num = np.min(descr['speakers'].values())
     num_batches = num*(num-1) / 2
     num_batches = num_batches // size_batch
     print( 'Number of batches to sample {}'.format(num_batches))
-    Parallel(n_jobs=num_jobs, backend="threading")(
-        delayed(write_tokens_batch)(descr,proba,cdf,pairs,size_batch,out_dir,idx_batch) for idx_batch in range(num_batches))
+    for idx_batch in range(num_batches):
+        write_tokens_batch(descr,proba,cdf,pairs,size_batch,out_dir,idx_batch)
+    #Parallel(n_jobs=num_jobs, backend="threading")(
+    #    delayed(write_tokens_batch)(descr,proba,cdf,pairs,size_batch,out_dir,idx_batch) for idx_batch in range(num_batches))
 
 
 def read_spkid_file(spkid_file):
@@ -502,7 +507,7 @@ def read_spk_list(spk_file):
 def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
               out_dir, stats=False, seed=0,
               type_sampling_mode='f2', spk_sampling_mode='f2',
-              size_batch = 16, num_jobs=1):
+              size_batch = 16, num_jobs=1,train_mode=True):
     """
     Main function : takes Term Discovery results and sample pairs
         for training and testing an ABnet from it.
@@ -559,21 +564,23 @@ def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
     else:
         # generate and write pairs to disk
         seed = seed+1
-        os.makedirs(os.path.join(out_dir, 'train_pairs'))
-        export_pairs(os.path.join(out_dir, 'train_pairs'),
-                     train_descr, type_sampling_mode = type_sampling_mode, 
-                     spk_sampling_mode = spk_sampling_mode,
-                     seed=seed, size_batch = size_batch,
-                     num_jobs=num_jobs)
-        print("Train Pairs done")
-        seed = seed+1
-        os.makedirs(os.path.join(out_dir, 'dev_pairs')) 
-        export_pairs(os.path.join(out_dir,'dev_pairs'),
-                     dev_descr, type_sampling_mode = type_sampling_mode, 
-                     spk_sampling_mode = spk_sampling_mode,
-                     seed = seed,size_batch = size_batch,
-                     num_jobs=num_jobs)
-        print("Dev Pairs done")
+        if train_mode:
+            #os.makedirs(os.path.join(out_dir, 'train_pairs'))
+            export_pairs(os.path.join(out_dir, 'train_pairs'),
+                         train_descr, type_sampling_mode = type_sampling_mode, 
+                         spk_sampling_mode = spk_sampling_mode,
+                         seed=seed, size_batch = size_batch,
+                         num_jobs=num_jobs)
+            print("Train Pairs done")
+            seed = seed+1
+        else:
+            os.makedirs(os.path.join(out_dir, 'dev_pairs')) 
+            export_pairs(os.path.join(out_dir,'dev_pairs'),
+                         dev_descr, type_sampling_mode = type_sampling_mode, 
+                         spk_sampling_mode = spk_sampling_mode,
+                         seed = seed,size_batch = size_batch,
+                         num_jobs=num_jobs)
+            print("Dev Pairs done")
 
 
 ########
@@ -600,6 +607,9 @@ if __name__ == "__main__":
                         help = "number of pairs per batch")
     parser.add_argument('--num_jobs', type=int, default=1,
                         help = "number of jobs to output batch pairs")
+    parser.add_argument('--train_mode', type=bool, default=False,
+                        help = "number of jobs to output batch pairs")
+    
     args = parser.parse_args()
     assert args.type_sampling_mode in ['1', 'f', 'f2','fcube','log' ]
     assert args.spk_sampling_mode in ['1', 'f', 'f2','fcube','log']
@@ -608,6 +618,6 @@ if __name__ == "__main__":
     std2abnet(args.std_file, args.spkid_file, args.train_spk_file,
               args.dev_spk_file, args.out_dir, args.stats, args.seed,
               args.type_sampling_mode, args.spk_sampling_mode,args.size_batch,
-              args.num_jobs)
+              args.num_jobs,args.train_mode)
     print("Sample and output the pairs took {} s".format(time.time()-t1))
 
