@@ -419,10 +419,11 @@ def print_token(tok):
     return "{0} {1:.2f} {2:.2f}".format(tok[0], tok[1], tok[2])
 
 
-def write_tokens_batch(descr,proba,cdf,pairs,size_batch,out_dir,idx_batch):
+def write_tokens_batch(descr,proba,cdf,pairs,size_batch,num_batches,out_dir,idx_batch,seed=0):
         lines = []
+        np.random.seed(seed)
         t1 = time.time()
-        sampled_batch = sample_batch(proba,cdf,pairs,num_per_config=size_batch/4)
+        sampled_batch = sample_batch(proba,cdf,pairs,num_per_config=num_batches/4)
         #sampled_batch = sample_batch(proba,pairs,num_per_config=size_batch/4)
         print('sample the batch took {}'.format(time.time() - t1))
         for config in sampled_batch.keys():
@@ -452,8 +453,10 @@ def write_tokens_batch(descr,proba,cdf,pairs,size_batch,out_dir,idx_batch):
                     lines.append(tok1 + " " + tok2 + " " +  pair_type + "\n")
         
         random.shuffle(lines)
-        with open(os.path.join(out_dir,'pair_'+str(idx_batch))+'.batch', 'w') as fh:
-            fh.writelines(lines)
+        #prev_idx = 0
+        for idx in range(1,num_batches//size_batch):    
+            with open(os.path.join(out_dir,'pair_'+str(idx_batch))+'_'+str(idx)+'.batch', 'w') as fh:
+                    fh.writelines(lines[(idx-1)*size_batch:(idx)*size_batch])
 
 
 def export_pairs(out_dir, descr,type_sampling_mode='f2',spk_sampling_mode='f2', seed=0, size_batch=16 ,num_jobs=1):
@@ -482,7 +485,7 @@ def export_pairs(out_dir, descr,type_sampling_mode='f2',spk_sampling_mode='f2', 
     num_batches = num_batches // size_batch
     print( 'Number of batches to sample {}'.format(num_batches))
     for idx_batch in range(num_batches):
-        write_tokens_batch(descr,proba,cdf,pairs,size_batch,out_dir,idx_batch)
+        write_tokens_batch(descr,proba,cdf,pairs,size_batch,num_batches,out_dir,idx_batch,seed=seed+idx_batch)
     #Parallel(n_jobs=num_jobs, backend="threading")(
     #    delayed(write_tokens_batch)(descr,proba,cdf,pairs,size_batch,out_dir,idx_batch) for idx_batch in range(num_batches))
 
@@ -565,6 +568,7 @@ def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
         # generate and write pairs to disk
         seed = seed+1
         if train_mode:
+            print('train mode true')
             #os.makedirs(os.path.join(out_dir, 'train_pairs'))
             export_pairs(os.path.join(out_dir, 'train_pairs'),
                          train_descr, type_sampling_mode = type_sampling_mode, 
@@ -574,7 +578,7 @@ def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
             print("Train Pairs done")
             seed = seed+1
         else:
-            os.makedirs(os.path.join(out_dir, 'dev_pairs')) 
+            #os.makedirs(os.path.join(out_dir, 'dev_pairs')) 
             export_pairs(os.path.join(out_dir,'dev_pairs'),
                          dev_descr, type_sampling_mode = type_sampling_mode, 
                          spk_sampling_mode = spk_sampling_mode,
