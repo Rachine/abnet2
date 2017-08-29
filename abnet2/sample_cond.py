@@ -349,8 +349,8 @@ def prepare_multinomial_sampling(p_spk_types):
         cdf[config] /= cdf[config][-1]
     return cdf
 
-def sample_searchidx(cdf,config,num_per_config):
-    uniform_samples = np.random.random_sample(num_per_config)
+def sample_searchidx(cdf,config,num_pairs_batch):
+    uniform_samples = np.random.random_sample(num_pairs_batch)
     idx = cdf[config].searchsorted(uniform_samples, side='right')
     return idx
 
@@ -359,14 +359,21 @@ def sample_batch(p_spk_types,
                  cdf,
                  pairs,
                  seed=0, prefix='',
-                 num_per_config=15):
-    #Sample batch of size 4 * num_per_config
+                 num_pairs_batch=32,
+                 ratio_same_diff=0.1):
+    #Sample batch of size num_pairs_batch
         
     np.random.seed(seed)
     sampled_tokens = {'Stype_Sspk' : [],
              'Stype_Dspk' : [],
              'Dtype_Sspk' : [],
              'Dtype_Dspk' : []}
+    num_same_spk = int((num_pairs_batch)*0.1)
+    num_diff_spk = num_pairs_batch - num_same_spk
+    sampled_ratio = {'Stype_Sspk' : num_same_spk/2,
+             'Stype_Dspk' : num_diff_spk/2,
+             'Dtype_Sspk' : num_same_spk/2,
+             'Dtype_Dspk' : num_diff_spk/2}
     for config in p_spk_types.keys():
         t0 = time.time()
         proba_config = np.array(p_spk_types[config].values())
@@ -377,7 +384,7 @@ def sample_batch(p_spk_types,
         t1 = time.time()
         #sample_idx = np.random.choice(sizes,num_per_config,p=proba_config, replace=True)
         #print('sample indexes took {} s'.format(time.time()-t1))
-        sample_idx = sample_searchidx(cdf,config,num_per_config)
+        sample_idx = sample_searchidx(cdf,config,sampled_ratio[config])
         sample = keys[sample_idx]
         if config == 'Stype_Sspk':
             for key in sample:
@@ -423,8 +430,7 @@ def write_tokens_batch(descr,proba,cdf,pairs,size_batch,num_batches,out_dir,idx_
         lines = []
         np.random.seed(seed)
         t1 = time.time()
-        sampled_batch = sample_batch(proba,cdf,pairs,num_per_config=num_batches/4)
-        #sampled_batch = sample_batch(proba,pairs,num_per_config=size_batch/4)
+        sampled_batch = sample_batch(proba,cdf,pairs,num_pairs_batch=num_batches)
         print('sample the batch took {}'.format(time.time() - t1))
         for config in sampled_batch.keys():
             if config == 'Stype_Sspk':
@@ -569,7 +575,7 @@ def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
         seed = seed+1
         if train_mode:
             print('train mode true')
-            #os.makedirs(os.path.join(out_dir, 'train_pairs'))
+            os.makedirs(os.path.join(out_dir, 'train_pairs'))
             export_pairs(os.path.join(out_dir, 'train_pairs'),
                          train_descr, type_sampling_mode = type_sampling_mode, 
                          spk_sampling_mode = spk_sampling_mode,
@@ -578,7 +584,7 @@ def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
             print("Train Pairs done")
             seed = seed+1
         else:
-            #os.makedirs(os.path.join(out_dir, 'dev_pairs')) 
+            os.makedirs(os.path.join(out_dir, 'dev_pairs')) 
             export_pairs(os.path.join(out_dir,'dev_pairs'),
                          dev_descr, type_sampling_mode = type_sampling_mode, 
                          spk_sampling_mode = spk_sampling_mode,
