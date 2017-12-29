@@ -25,6 +25,7 @@ import time
 import random
 #from joblib import Parallel, delayed
 import pickle
+import codecs
 
 def parse_STD_results(STD_file):
     """
@@ -41,15 +42,18 @@ def parse_STD_results(STD_file):
         List of List
     """
     
-    with open(STD_file, 'r') as fh:
-        lines = fh.readlines()
+    #with open(STD_file, 'rb') as fh:
+    #    lines = fh.readlines()
+    with codecs.open(STD_file, "r", "utf-8") as fh:
+         lines = fh.readlines()
     clusters = []
     i = 0
     while i < len(lines):
         cluster = []
         tokens = lines[i].strip().split(" ")
-        assert len(tokens) == 2, str(tokens)
+        assert len(tokens) == 2,'problem line {} '.format(i) + str(tokens)
         i = i+1
+        len_wrd = len(tokens[1])
         tokens = lines[i].strip().split(" ")
         assert len(tokens) == 3, "Empty class!"
         fid, t0, t1 = tokens
@@ -66,7 +70,8 @@ def parse_STD_results(STD_file):
             else:
                 assert tokens == ['']
                 new_class = True
-                clusters.append(cluster)
+                if len_wrd > 0:
+                    clusters.append(cluster)
                 i = i+1        
     return clusters
 #STD_file = '/home/rriad/abnet2/abnet2/cluster_to_debug.txt'
@@ -80,6 +85,24 @@ def split_clusters(clusters, train_spk, test_spk, get_spkid_from_fid):
                              if get_spkid_from_fid(tok[0]) in train_spk]
         test_cluster = [tok for tok in cluster \
                              if get_spkid_from_fid(tok[0]) in test_spk]
+        if train_cluster:
+            train_clusters.append(train_cluster)
+        if test_cluster:
+            test_clusters.append(test_cluster)
+    return train_clusters, test_clusters
+
+def split_clusters_ratio(clusters, train_spk, test_spk, get_spkid_from_fid, ratio=0.7):    
+    # train/test split based on talkers
+    train_clusters, test_clusters = [], []
+    num_clusters = len(clusters)
+    num_train = int(ratio*num_clusters)
+    train_idx = np.random.choice(num_clusters, num_train, replace=False)
+
+    for idx, cluster in enumerate(clusters):
+        train_cluster = [tok for tok in cluster \
+                             if idx in train_idx]
+        test_cluster = [tok for tok in cluster \
+                             if idx not in train_idx]
         if train_cluster:
             train_clusters.append(train_cluster)
         if test_cluster:
@@ -147,7 +170,7 @@ def type_sample_p(std_descr,  type_samp = 'log'):
     types = std_descr['types']
     assert type_samp in ['1', 'f', 'f2','log', 'fcube']
     if type_samp == '1':        
-        type_samp_func = lambda x : 1
+        type_samp_func = lambda x : 1.0
     if type_samp == 'f2':
         type_samp_func = lambda x : x
     if type_samp == 'f':
@@ -199,7 +222,7 @@ def sample_spk_p(std_descr, spk_samp = 'f2'):
             W_spk_types[(speakers[tok],tokens_type[tok])] = 1.0
     
     if spk_samp == '1':
-        spk_samp_func = lambda x : 1
+        spk_samp_func = lambda x : 0.0 if x == 0 else 1.0
     if spk_samp == 'f2':
         spk_samp_func = lambda x : x
     if spk_samp == 'f':
@@ -214,7 +237,10 @@ def sample_spk_p(std_descr, spk_samp = 'f2'):
         for (spk2,type_jdx) in W_spk_types.keys():
             if spk == spk2:
                 if type_idx == type_jdx: 
-                    p_spk_types['Stype_Sspk'][(spk,type_idx)] = spk_samp_func(W_spk_types[(spk,type_idx)]*(W_spk_types[(spk,type_idx)] - 1) )  
+                    if (W_spk_types[(spk,type_idx)] - 1.0) == 0:
+                        p_spk_types['Stype_Sspk'][(spk,type_idx)]=0.0
+                    else:
+                        p_spk_types['Stype_Sspk'][(spk,type_idx)] = spk_samp_func(W_spk_types[(spk,type_idx)])   
                 else:
                     min_idx,max_idx = np.min([type_idx,type_jdx]),np.max([type_idx,type_jdx])
                     p_spk_types['Dtype_Sspk'][(spk,min_idx,max_idx)] = spk_samp_func(W_spk_types[(spk,type_idx)])*spk_samp_func(W_spk_types[(spk,type_jdx)]) 
@@ -368,7 +394,7 @@ def sample_batch(p_spk_types,
              'Stype_Dspk' : [],
              'Dtype_Sspk' : [],
              'Dtype_Dspk' : []}
-    num_same_spk = int((num_pairs_batch)*0.1)
+    num_same_spk = int((num_pairs_batch)*ratio_same_diff)
     num_diff_spk = num_pairs_batch - num_same_spk
     sampled_ratio = {'Stype_Sspk' : num_same_spk/2,
              'Stype_Dspk' : num_diff_spk/2,
@@ -398,7 +424,10 @@ def sample_batch(p_spk_types,
                 try:
                     pot_tok = pairs[config][spk1,spk2,int(type_idx)]
                 except:
-                    pot_tok = pairs[config][spk2,spk1,int(type_idx)]
+                    try:
+                        pot_tok = pairs[config][spk2,spk1,int(type_idx)]
+                    except:
+                        continue
                 num_tok = len(pot_tok)
                 sampled_tokens[config].append(pot_tok[np.random.choice(num_tok)])
         if config == 'Dtype_Sspk':
@@ -413,7 +442,10 @@ def sample_batch(p_spk_types,
                 try:
                     pot_tok = pairs[config][spk1,spk2,int(type_idx),int(type_jdx)]
                 except:
-                    pot_tok = pairs[config][spk2,spk1,int(type_idx),int(type_jdx)]
+                    try:
+                        pot_tok = pairs[config][spk2,spk1,int(type_idx),int(type_jdx)]
+                    except:
+                        continue
                 num_tok = len(pot_tok)
                 sampled_tokens[config].append(pot_tok[np.random.choice(num_tok)])
         #print('fill batch took {} s'.format(str(time.time() - t1 )))
@@ -430,7 +462,7 @@ def write_tokens_batch(descr,proba,cdf,pairs,size_batch,num_batches,out_dir,idx_
         lines = []
         np.random.seed(seed)
         t1 = time.time()
-        sampled_batch = sample_batch(proba,cdf,pairs,num_pairs_batch=num_batches)
+        sampled_batch = sample_batch(proba,cdf,pairs,num_pairs_batch=num_batches,seed=seed)
         print('sample the batch took {}'.format(time.time() - t1))
         for config in sampled_batch.keys():
             if config == 'Stype_Sspk':
@@ -488,10 +520,17 @@ def export_pairs(out_dir, descr,type_sampling_mode='f2',spk_sampling_mode='f2', 
     print("Proba done in {} s, start sampling batches and writing".format(time.time()-timing))
     num = np.min(descr['speakers'].values())
     num_batches = num*(num-1) / 2
-    num_batches = num_batches // size_batch
+    num_batches = num_batches 
     print( 'Number of batches to sample {}'.format(num_batches))
-    for idx_batch in range(num_batches):
-        write_tokens_batch(descr,proba,cdf,pairs,size_batch,num_batches,out_dir,idx_batch,seed=seed+idx_batch)
+    #train_batch = True
+    idx_batch = 0
+    write_tokens_batch(descr,proba,cdf,pairs,size_batch,num_batches,out_dir,idx_batch,seed=seed+idx_batch)
+        #if train_batch: 
+        #    train_batch = False
+        #    write_tokens_batch(descr,proba,cdf,pairs,size_batch,num_batches,os.path.join(out_dir, 'train_pairs'),idx_batch,seed=seed+idx_batch)
+        #else:
+        #    train_batch = True
+        #    write_tokens_batch(descr,proba,cdf,pairs,size_batch,num_batches,os.path.join(out_dir, 'dev_pairs'),idx_batch,seed=seed+idx_batch)
     #Parallel(n_jobs=num_jobs, backend="threading")(
     #    delayed(write_tokens_batch)(descr,proba,cdf,pairs,size_batch,out_dir,idx_batch) for idx_batch in range(num_batches))
 
@@ -549,12 +588,12 @@ def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
     # parsing train/dev split
     train, dev = read_spk_list(train_spk_file), read_spk_list(dev_spk_file)
     # check that no speaker is present twice
-    assert len(np.array(train+dev)) == len(np.unique(np.array(train+dev)))
+    #assert len(np.array(train+dev)) == len(np.unique(np.array(train+dev)))
     # check that all speakers match speakers in the STD results
     #for spk in train + dev:
     #    assert spk in std_descr['speakers'].keys(), spk
     # train, dev split
-    train_clusters, dev_clusters = split_clusters(clusters, train, dev,
+    train_clusters, dev_clusters = split_clusters_ratio(clusters, train, dev,
                                                    get_spkid_from_fid)
     train_descr = analyze_clusters(train_clusters, get_spkid_from_fid)
     dev_descr = analyze_clusters(dev_clusters, get_spkid_from_fid)
@@ -574,6 +613,14 @@ def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
         # generate and write pairs to disk
         seed = seed+1
         if train_mode:
+            print('Train mode')
+            os.makedirs(os.path.join(out_dir, 'dev_pairs')) 
+            export_pairs(os.path.join(out_dir,'dev_pairs'),
+                         dev_descr, type_sampling_mode = type_sampling_mode, 
+                         spk_sampling_mode = spk_sampling_mode,
+                         seed = seed,size_batch = size_batch,
+                         num_jobs=num_jobs)
+            print("Dev Pairs done")
             print('train mode true')
             os.makedirs(os.path.join(out_dir, 'train_pairs'))
             export_pairs(os.path.join(out_dir, 'train_pairs'),
@@ -583,14 +630,14 @@ def std2abnet(std_file, spkid_file, train_spk_file, dev_spk_file,
                          num_jobs=num_jobs)
             print("Train Pairs done")
             seed = seed+1
-        else:
-            os.makedirs(os.path.join(out_dir, 'dev_pairs')) 
-            export_pairs(os.path.join(out_dir,'dev_pairs'),
-                         dev_descr, type_sampling_mode = type_sampling_mode, 
-                         spk_sampling_mode = spk_sampling_mode,
-                         seed = seed,size_batch = size_batch,
-                         num_jobs=num_jobs)
-            print("Dev Pairs done")
+#        else:
+            #os.makedirs(os.path.join(out_dir, 'dev_pairs')) 
+            #export_pairs(os.path.join(out_dir,'dev_pairs'),
+            #             dev_descr, type_sampling_mode = type_sampling_mode, 
+            #             spk_sampling_mode = spk_sampling_mode,
+            #             seed = seed,size_batch = size_batch,
+            #             num_jobs=num_jobs)
+            #print("Dev Pairs done")
 
 
 ########
