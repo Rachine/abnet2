@@ -16,7 +16,7 @@ import copy
 
 epsilon = np.finfo(np.float32).eps
 
-def iterate_minibatches_folder(inputs_folder, batchsize=32, shuffle=False):
+def iterate_minibatches_folder(inputs_folder, batchsize=8, shuffle=False):
     """Generate mini bacthes from each file in the inputs folder
     """
     num_batch_files = len([name for name in os.listdir(inputs_folder) if os.path.isfile(name)])
@@ -29,7 +29,7 @@ def iterate_minibatches_folder(inputs_folder, batchsize=32, shuffle=False):
 
 
 
-def iterate_minibatches(inputs, batchsize=32, shuffle=False):
+def iterate_minibatches(inputs, batchsize=8, shuffle=False):
     """Generate mini batches from datasets
     """
     len_data = len(inputs[0])
@@ -57,7 +57,7 @@ def train_iteration(data_train, data_val, train_fn, val_fn):
     """Generic train iteration: one full pass over the data"""
     train_err = 0
     train_batches = 0
-    for batch in iterate_minibatches(data_train, 32, shuffle=True):
+    for batch in iterate_minibatches(data_train, 8, shuffle=True):
         train_err += train_fn(batch)
         train_batches += 1
 
@@ -65,7 +65,7 @@ def train_iteration(data_train, data_val, train_fn, val_fn):
     val_err = 0
     val_acc = 0
     val_batches = 0
-    for batch in iterate_minibatches(data_val, 32, shuffle=False):
+    for batch in iterate_minibatches(data_val, 8, shuffle=False):
         aux = val_fn(batch)
         try:
             err, acc = aux
@@ -174,7 +174,10 @@ def train_by_batch(train_pairs, validation_pairs,features, train_fn, val_fn, net
         patience = max_epochs
     patience_val = 0
     best_val = None
-
+    if max_epochs ==0:
+        best_model = layers.get_all_param_values(network)
+        best_epoch = 0
+        return best_model, best_epoch, run 
     for epoch in range(max_epochs):
         start_time = time.time()
         data_train = get_next_batch(features,train_pairs)
@@ -193,8 +196,8 @@ def train_by_batch(train_pairs, validation_pairs,features, train_fn, val_fn, net
             patience_val = 0
             best_model = layers.get_all_param_values(network)
             best_epoch = epoch
-            with open(out_directory+"/nnet_epoch"+epoch, 'w') as fh:
-                pickle.dump((best_epoch, best_model), fh)
+            #with open(out_directory+"/nnet_epoch"+epoch, 'w') as fh:
+            #    pickle.dump((best_epoch, best_model), fh)
         else:
             patience_val += 1
             if patience_val > patience:
@@ -294,14 +297,14 @@ class Classifier_Nnet(object):
 
 
     def evaluate(self, X_test):
-        for batch in iterate_minibatches([X_test], 32, shuffle=False):
+        for batch in iterate_minibatches([X_test], 8, shuffle=False):
             return self.test_prediction(*batch)
 
     def score(self, X_test, Y_test):
         test_err = 0
         test_acc = 0
         test_batches = 0
-        for batch in iterate_minibatches(X_test, Y_test, 32, shuffle=False):
+        for batch in iterate_minibatches(X_test, Y_test, 8, shuffle=False):
             inputs, targets = batch
             err, acc = self.val_fn(inputs, targets)
             test_err += err
@@ -317,7 +320,7 @@ class ABnet(object):
     """Siamese neural network
     """
     def __init__(self, dims, nonlinearities=None, dropouts=None,
-                 update_fn=None, batch_norm=True,
+                 update_fn=None, batch_norm=False,
                  loss_type='cosine_margin', margin=0.8, lstm_layers=False):
         """Initialize a Siamese neural network
 
@@ -329,13 +332,14 @@ class ABnet(object):
             Do batch normalisation on first layer, default to false
         """
         assert len(dims) >= 3, 'Not enough dimmensions'
+        print('Initialization ABnet')
         if dropouts != None:
             dropouts = copy.copy(dropouts)
             assert len(dropouts) == len(dims) - 1
             dropouts.append(0)
         else:
-            #dropouts = [0.2, 0.5, 0.5, 0.5]
-            dropouts = [0] * len(dims)
+            #dropouts = [0.2, 0.3, 0.3, 0.3]
+            dropouts = [0.] * len(dims)
         if nonlinearities==None:
             nonlinearities = [nl.sigmoid] * (len(dims) -1)
             #nonlinearities = [nl.rectify] * (len(dims) -1)
@@ -366,7 +370,6 @@ class ABnet(object):
                                             cell=network1.cell, outgate=network1.outgate,
                                             nonlinearity=nonlin)
             else:
-                                
                 network1 = layers.DenseLayer(network1, num_units=dim,
                                              W=lasagne.init.GlorotUniform(),
                                              nonlinearity=nonlin)
@@ -417,18 +420,18 @@ class ABnet(object):
         self.change_update()
 
     def change_update(self, update_fn=lasagne.updates.adadelta):
-        self.updates = update_fn(self.loss, self.params)
+        self.updates = update_fn(self.loss, self.params, learning_rate=0.01)
         self.train_fn = theano.function(
             [self.input_var1, self.input_var2, self.target_var],
-            self.loss, updates=self.updates)
+            self.loss, updates=self.updates, allow_input_downcast=True)
         self.train_and_eval_fn = theano.function(
             [self.input_var1, self.input_var2, self.target_var],
-            self.loss, updates=self.updates)
+            self.loss, updates=self.updates, allow_input_downcast=True)
         self.val_fn = theano.function(
             [self.input_var1, self.input_var2, self.target_var],
-            [self.test_loss])
+            [self.test_loss], allow_input_downcast=True)
         self.eval_fn = theano.function(
-            [self.input_var1], self.test_prediction1)
+            [self.input_var1], self.test_prediction1, allow_input_downcast=True)
 
     def train(self, X_train1, X_train2, y_train, X_val1, X_val2, y_val, max_epochs=500, patience=20):
         def train_batch(batch_data):
@@ -457,7 +460,7 @@ class ABnet(object):
 
     def evaluate(self, X_test):
         embs = []
-        for batch in iterate_minibatches([X_test], 32, shuffle=False):
+        for batch in iterate_minibatches([X_test], 8, shuffle=False):
             inputs = batch[0]
             emb = self.eval_fn(inputs)
             embs.append(emb)
@@ -612,7 +615,8 @@ def loss_fn(prediction1, prediction2, targets, loss='cosine_margin', margin=0.15
         cos_sim_same = T.switch(cos_sim < x0, 1, (1 - cos_sim) / (1 - x0))
         cos_sim_diff = T.switch(cos_sim < x0, 0, (cos_sim - x0) / (1 - x0))
     elif loss == 'coscos2':
-        cos_sim_same = 1.-T.sqrt(cos_sim)
+        #cos_sim_same = 1.-T.sqrt(cos_sim)
+        cos_sim_same = (1.-cos_sim)/2
         cos_sim_diff = cos_sim ** 2
 
     # elif loss == 'euclidian_margin':
@@ -621,6 +625,8 @@ def loss_fn(prediction1, prediction2, targets, loss='cosine_margin', margin=0.15
     #     cos_sim_same = eucl_dist
 
     if return_similarities:
-        return T.mean(T.switch(targets, cos_sim_same, cos_sim_diff)), cos_sim
+        return T.sum(T.switch(targets, cos_sim_same, cos_sim_diff)), cos_sim
+        #return T.mean(T.switch(targets, cos_sim_same, cos_sim_diff)), cos_sim
     else:
-        return T.mean(T.switch(targets, cos_sim_same, cos_sim_diff))
+        return T.sum(T.switch(targets, cos_sim_same, cos_sim_diff))
+        #return T.mean(T.switch(targets, cos_sim_same, cos_sim_diff))
